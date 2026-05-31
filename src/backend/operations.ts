@@ -1,5 +1,6 @@
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
+import type { WorldBookEntryDTO } from "lumiverse-spindle-types";
 import {
   EXTENSION_KEY,
   ROOT_NODE_ID,
@@ -58,6 +59,7 @@ import {
   characterHasStoredConfig,
   getRuntimeBooks,
   invalidateBookCache,
+  invalidateWorldBookListCache,
   listAllCharacters,
   listAllEntries,
   listAllWorldBooks,
@@ -65,13 +67,23 @@ import {
   loadBookConfig,
   loadCharacterConfig,
   loadGlobalSettings,
+  loadObsidianApiKey,
   loadTreeIndex,
   normalizeEntryMetaForWrite,
   saveBookConfig,
   saveCharacterConfig,
   saveGlobalSettings,
+  saveObsidianApiKey,
   saveTreeIndex,
 } from "./storage";
+import {
+  type ObsidianConfig,
+  type ObsidianNote,
+  getNote,
+  parseWikilinks,
+  testConnection as testObsidianConnectionClient,
+  walkVault,
+} from "./obsidian";
 
 export interface OperationProgressUpdate {
   message?: string;
@@ -1028,6 +1040,224 @@ export async function buildTreeFromMetadata(
     completed,
     total: ids.length,
   };
+}
+
+// ─── Obsidian vault integration ───────────────────────────────────────────
+
+function noteTitle(note: ObsidianNote): string {
+  const fm = note.frontmatter;
+  if (typeof fm.title === "string" && fm.title.trim()) return fm.title.trim();
+  const base = note.path.split("/").pop() ?? note.path;
+  return base.replace(/\.md$/i, "") || note.path;
+}
+
+function noteFolderPath(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx >= 0 ? path.slice(0, idx) : "";
+}
+
+function noteAliases(note: ObsidianNote): string[] {
+  const raw = note.frontmatter.aliases ?? note.frontmatter.alias;
+  if (Array.isArray(raw)) return uniqueStrings(raw.filter((v): v is string => typeof v === "string"));
+  if (typeof raw === "string") return uniqueStrings(raw.split(",").map((v) => v.trim()));
+  return [];
+}
+
+function readObsidianPath(entry: WorldBookEntryDTO): string | null {
+  const ext = (entry.extensions || {})[EXTENSION_KEY];
+  if (ext && typeof ext === "object" && !Array.isArray(ext)) {
+    const value = (ext as Record<string, unknown>).obsidianPath;
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+async function buildObsidianConfig(
+  userId: string,
+  settings: GlobalLoreRecallSettings,
+  subfolder: string,
+  apiKeyOverride: string | null,
+): Promise<ObsidianConfig> {
+  const apiKey = apiKeyOverride && apiKeyOverride.trim() ? apiKeyOverride.trim() : await loadObsidianApiKey(userId);
+  if (!settings.obsidianBaseUrl.trim()) {
+    throw new Error("Set the Obsidian base URL before connecting (e.g. http://127.0.0.1:27123).");
+  }
+  if (!apiKey) {
+    throw new Error("No Obsidian API key is stored. Enter the Local REST API key and save before syncing.");
+  }
+  return { baseUrl: settings.obsidianBaseUrl.trim(), apiKey, subfolder: subfolder.replace(/^\/+|\/+$/g, "") };
+}
+
+export async function saveObsidianSettings(
+  params: { characterId: string; baseUrl: string; apiKey: string | null; vaultSource: "default" | "obsidian"; vaultSubfolder: string },
+  userId: string,
+): Promise<void> {
+  await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
+  if (params.apiKey && params.apiKey.trim()) {
+    await saveObsidianApiKey(userId, params.apiKey.trim());
+  }
+  await saveCharacterConfig(
+    params.characterId,
+    { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder },
+    userId,
+  );
+}
+
+export async function runObsidianConnectionTest(
+  params: { baseUrl: string; apiKey: string | null },
+  userId: string,
+): Promise<string> {
+  // Persist the base URL the user is testing so it survives even if they don't hit Save.
+  const settings = await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
+  if (params.apiKey && params.apiKey.trim()) {
+    await saveObsidianApiKey(userId, params.apiKey.trim());
+  }
+  const cfg = await buildObsidianConfig(userId, settings, "", params.apiKey);
+  const info = await testObsidianConnectionClient(cfg);
+  if (!info.authenticated) {
+    return `Reached ${cfg.baseUrl}, but the API key was not accepted. Double-check the Local REST API key.`;
+  }
+  return `Connected to ${info.service} at ${cfg.baseUrl}.`;
+}
+
+export async function syncObsidianVault(
+  characterId: string,
+  userId: string,
+  operation?: OperationContext,
+): Promise<OperationOutcome> {
+  const issues: OperationIssue[] = [];
+  const settings = await loadGlobalSettings(userId);
+  const character = await spindle.characters.get(characterId, userId);
+  if (!character) {
+    throw new Error("The active character could not be loaded for syncing.");
+  }
+  const config = await loadCharacterConfig(characterId, userId, character);
+  const cfg = await buildObsidianConfig(userId, settings, config.obsidianVaultSubfolder, null);
+
+  operation?.progress({ phase: "loading", message: "Connecting to Obsidian...", percent: 2, current: null, total: null });
+
+  // Resolve or create the managed world book for this character's vault.
+  let bookId = config.obsidianManagedBookId;
+  let book = bookId ? await spindle.world_books.get(bookId, userId) : null;
+  if (!book) {
+    book = await spindle.world_books.create(
+      {
+        name: `Obsidian — ${character.name || "Vault"}`,
+        description: "Managed by Lore Recall — synced from an Obsidian vault. Re-sync to update.",
+        metadata: { source: "obsidian", loreRecallManaged: true },
+      },
+      userId,
+    );
+    bookId = book.id;
+    await saveCharacterConfig(characterId, { obsidianManagedBookId: bookId }, userId, character);
+  }
+
+  operation?.progress({ phase: "loading", message: "Listing vault notes...", percent: 6, current: null, total: null });
+  const notePaths = await walkVault(cfg);
+
+  const existingEntries = await listAllEntries(bookId, userId);
+  const byPath = new Map<string, WorldBookEntryDTO>();
+  for (const entry of existingEntries) {
+    const path = readObsidianPath(entry);
+    if (path) byPath.set(path, entry);
+  }
+
+  let added = 0;
+  let updated = 0;
+  const syncedPaths = new Set<string>();
+
+  for (const [index, notePath] of notePaths.entries()) {
+    syncedPaths.add(notePath);
+    operation?.progress({
+      phase: "classifying",
+      message: `Syncing ${notePath}`,
+      current: index + 1,
+      total: notePaths.length,
+      percent: Math.round((index / Math.max(1, notePaths.length)) * 80) + 6,
+    });
+
+    try {
+      const note = await getNote(cfg, notePath);
+      const title = noteTitle(note);
+      const folder = noteFolderPath(note.path || notePath);
+      const wikilinks = parseWikilinks(note.content);
+      const aliases = noteAliases(note);
+      const existing = byPath.get(notePath);
+      const meta = {
+        obsidianPath: notePath,
+        label: title,
+        aliases,
+        summary: "",
+        collapsedText: "",
+        tags: note.tags,
+      };
+      const entryInput = {
+        content: note.content,
+        comment: title,
+        key: [title],
+        keysecondary: uniqueStrings([...wikilinks, ...aliases]),
+        group_name: folder,
+        extensions: {
+          ...((existing?.extensions as Record<string, unknown> | undefined) ?? {}),
+          [EXTENSION_KEY]: {
+            ...(((existing?.extensions as Record<string, unknown> | undefined)?.[EXTENSION_KEY] as Record<string, unknown> | undefined) ?? {}),
+            ...meta,
+          },
+        },
+      };
+
+      if (existing) {
+        await spindle.world_books.entries.update(existing.id, entryInput, userId);
+        updated += 1;
+      } else {
+        await spindle.world_books.entries.create(bookId, entryInput, userId);
+        added += 1;
+      }
+    } catch (error) {
+      const issue: OperationIssue = {
+        severity: "warn",
+        message: `Skipped ${notePath}: ${describeError(error)}`,
+        bookId,
+        phase: "classifying",
+      };
+      issues.push(issue);
+      operation?.addIssue(issue);
+    }
+  }
+
+  // Remove entries whose source note no longer exists in the vault.
+  let removed = 0;
+  for (const [path, entry] of byPath.entries()) {
+    if (syncedPaths.has(path)) continue;
+    try {
+      await spindle.world_books.entries.delete(entry.id, userId);
+      removed += 1;
+    } catch (error) {
+      const issue: OperationIssue = {
+        severity: "warn",
+        message: `Could not remove stale entry for ${path}: ${describeError(error)}`,
+        bookId,
+        phase: "saving",
+      };
+      issues.push(issue);
+      operation?.addIssue(issue);
+    }
+  }
+
+  operation?.progress({ phase: "saving", message: "Building tree from vault folders...", percent: 90, current: null, total: null });
+  invalidateWorldBookListCache(userId);
+  await invalidateBookCache(bookId, userId);
+  // Reuse the metadata tree builder: each entry's group_name (folder path) becomes the hierarchy.
+  const treeOutcome = await buildTreeFromMetadata([bookId], userId, operation);
+  for (const issue of treeOutcome.issues) issues.push(issue);
+
+  spindle.log.info(
+    `Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (book ${bookId}).`,
+  );
+
+  operation?.progress({ phase: "complete", message: "Vault sync complete.", percent: 100, current: null, total: null });
+
+  return { issues, completed: added + updated, total: notePaths.length };
 }
 
 function chunkEntries<T extends { content: string; previewText: string }>(

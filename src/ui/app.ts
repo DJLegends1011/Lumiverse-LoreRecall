@@ -161,6 +161,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let globalDraftKey = "";
   let characterDraft: CharacterDraft | null = null;
   let characterDraftKey = "";
+  // Transient draft for the Obsidian API key input. Never populated from state
+  // (the key lives in the backend enclave and is never sent to the UI).
+  let obsidianApiKeyDraft = "";
   const bookDrafts = new Map<string, BookDraft>();
   const entryDrafts = new Map<string, EntryDraft>();
   const categoryDrafts = new Map<string, CategoryDraft>();
@@ -2945,6 +2948,119 @@ export function setup(ctx: SpindleFrontendContext) {
     return section;
   }
 
+  function renderObsidianSettings(state: FrontendState): HTMLElement {
+    const section = createElement("section", "lore-section");
+    section.appendChild(
+      createSectionHead(
+        "Obsidian vault",
+        "Sync an Obsidian vault into a managed book. Folders become categories, notes become entries, and [[wikilinks]] link related notes.",
+      ),
+    );
+
+    if (!characterDraft || !globalDraft || !state.activeCharacterId) {
+      section.appendChild(
+        createEmpty("No active character", "Open a character chat to connect an Obsidian vault.", null, "feed"),
+        );
+      return section;
+    }
+
+    const form = createElement("div", "lore-form");
+
+    form.appendChild(
+      createField(
+        "Lore source",
+        createSelect(
+          characterDraft.vaultSource,
+          [
+            ["default", "Default managed books"],
+            ["obsidian", "Obsidian vault"],
+          ],
+          (next) => {
+            characterDraft!.vaultSource = next;
+          },
+        ),
+      ),
+    );
+
+    form.appendChild(
+      createField(
+        "Base URL",
+        createTextInput(globalDraft.obsidianBaseUrl, "http://127.0.0.1:27123", (next) => {
+          globalDraft!.obsidianBaseUrl = next;
+        }),
+      ),
+    );
+
+    const apiKeyInput = createTextInput(
+      obsidianApiKeyDraft,
+      state.obsidianHasApiKey ? "•••••• (stored — leave blank to keep)" : "Local REST API key",
+      (next) => {
+        obsidianApiKeyDraft = next;
+      },
+    );
+    apiKeyInput.type = "password";
+    form.appendChild(createField("API key", apiKeyInput));
+
+    form.appendChild(
+      createField(
+        "Vault subfolder",
+        createTextInput(characterDraft.obsidianVaultSubfolder, "(optional, e.g. Lore/Characters)", (next) => {
+          characterDraft!.obsidianVaultSubfolder = next;
+        }),
+      ),
+    );
+
+    form.appendChild(
+      createFieldNote(
+        characterDraft.obsidianManagedBookId
+          ? "Synced into a managed book. Re-syncing updates changed notes, adds new ones, and removes deleted ones."
+          : "On first sync, a dedicated managed book is created for this character's vault.",
+      ),
+    );
+
+    section.appendChild(form);
+
+    const actions = createElement("div", "lore-actions");
+    actions.appendChild(
+      createButton("Test connection", "lore-btn lore-btn-ghost lore-btn-sm", () => {
+        sendToBackend(ctx, {
+          type: "test_obsidian_connection",
+          chatId: state.activeChatId,
+          baseUrl: globalDraft!.obsidianBaseUrl,
+          apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
+        });
+      }),
+    );
+    actions.appendChild(createElement("span", "lore-actions-spacer"));
+    actions.appendChild(
+      createButton("Save Obsidian settings", "lore-btn lore-btn-sm", () => {
+        sendToBackend(ctx, {
+          type: "save_obsidian_settings",
+          characterId: state.activeCharacterId!,
+          chatId: state.activeChatId,
+          baseUrl: globalDraft!.obsidianBaseUrl,
+          apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
+          vaultSource: characterDraft!.vaultSource,
+          vaultSubfolder: characterDraft!.obsidianVaultSubfolder,
+        });
+        obsidianApiKeyDraft = "";
+        flashSavedNotice("Obsidian settings saved");
+      }),
+    );
+    actions.appendChild(
+      createButton("Sync vault", "lore-btn lore-btn-primary lore-btn-sm", () => {
+        sendToBackend(ctx, {
+          type: "sync_obsidian_vault",
+          characterId: state.activeCharacterId!,
+          chatId: state.activeChatId,
+        });
+        flashSavedNotice("Vault sync started");
+      }),
+    );
+    section.appendChild(actions);
+    return section;
+  }
+
   function renderBookSettings(state: FrontendState): HTMLElement {
     const section = createElement("section", "lore-section");
     section.appendChild(createSectionHead("Book settings", "Per-book enable, permission and description."));
@@ -3179,6 +3295,7 @@ export function setup(ctx: SpindleFrontendContext) {
         break;
       case "retrieval":
         activePanel.appendChild(renderCharacterSettings(currentState));
+        activePanel.appendChild(renderObsidianSettings(currentState));
         break;
       case "book":
         activePanel.appendChild(renderBookPanel(currentState));

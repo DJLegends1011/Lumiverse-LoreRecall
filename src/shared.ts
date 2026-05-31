@@ -23,6 +23,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalLoreRecallSettings = {
   treeGranularity: 0,
   chunkTokens: 30000,
   dedupMode: "none",
+  obsidianBaseUrl: "http://127.0.0.1:27123",
 };
 
 export const DEFAULT_CHARACTER_CONFIG: CharacterRetrievalConfig = {
@@ -38,6 +39,9 @@ export const DEFAULT_CHARACTER_CONFIG: CharacterRetrievalConfig = {
   selectiveRetrieval: true,
   multiBookMode: "unified",
   contextMessages: 10,
+  vaultSource: "default",
+  obsidianVaultSubfolder: "",
+  obsidianManagedBookId: "",
 };
 
 export const DEFAULT_BOOK_CONFIG: BookRetrievalConfig = {
@@ -173,6 +177,10 @@ export function normalizeGlobalSettings(value?: Partial<GlobalLoreRecallSettings
       120000,
     ),
     dedupMode: next.dedupMode === "lexical" || next.dedupMode === "llm" ? next.dedupMode : "none",
+    obsidianBaseUrl:
+      typeof next.obsidianBaseUrl === "string" && next.obsidianBaseUrl.trim()
+        ? next.obsidianBaseUrl.trim()
+        : DEFAULT_GLOBAL_SETTINGS.obsidianBaseUrl,
   };
 }
 
@@ -266,6 +274,11 @@ export function normalizeCharacterConfig(value?: Partial<CharacterRetrievalConfi
       1,
       100,
     ),
+    vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
+    obsidianVaultSubfolder:
+      typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianManagedBookId:
+      typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : "",
   };
 }
 

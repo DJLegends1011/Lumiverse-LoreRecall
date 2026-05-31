@@ -29,6 +29,9 @@ function makeState(overrides: Partial<FrontendState> = {}): FrontendState {
       selectiveRetrieval: true,
       multiBookMode: "unified",
       contextMessages: 10,
+      vaultSource: "default",
+      obsidianVaultSubfolder: "",
+      obsidianManagedBookId: "",
     },
     diagnosticsResults: [],
     globalSettings: {
@@ -41,6 +44,7 @@ function makeState(overrides: Partial<FrontendState> = {}): FrontendState {
       treeGranularity: 0,
       chunkTokens: 30000,
       dedupMode: "none",
+      obsidianBaseUrl: "http://127.0.0.1:27123",
     },
     managedEntries: {},
     preview: null,
@@ -48,6 +52,7 @@ function makeState(overrides: Partial<FrontendState> = {}): FrontendState {
     suggestedBookIds: [],
     treeIndexes: {},
     unassignedCounts: {},
+    obsidianHasApiKey: false,
     ...overrides,
   };
 }

@@ -30,6 +30,9 @@ import {
   moveCategory,
   patchEntryFlags,
   regenerateSummaries,
+  runObsidianConnectionTest,
+  saveObsidianSettings,
+  syncObsidianVault,
   updateCategory,
   updateEntryMeta,
 } from "./operations";
@@ -45,6 +48,7 @@ import {
   buildConnectionOption,
   computeSuggestedBookIds,
   getRuntimeBooks,
+  hasObsidianApiKey,
   invalidateWorldBookListCache,
   listAllWorldBooks,
   loadCharacterConfig,
@@ -371,11 +375,12 @@ function summarizeTrace(preview: RetrievalPreview): string {
 }
 
 async function buildState(userId: string, chatId?: string | null): Promise<StateBuildEnvelope> {
-  const [allBooks, activeChat, settings, connections] = await Promise.all([
+  const [allBooks, activeChat, settings, connections, obsidianHasApiKey] = await Promise.all([
     listAllWorldBooks(userId),
     resolveActiveChat(userId, chatId),
     loadGlobalSettings(userId),
     listConnectionsCached(userId),
+    hasObsidianApiKey(userId),
   ]);
 
   const sortedBooks = allBooks
@@ -405,6 +410,7 @@ async function buildState(userId: string, chatId?: string | null): Promise<State
     suggestedBookIds: [],
     retrievalFeed: cachedRetrievalFeed,
     preview: cachedPreview,
+    obsidianHasApiKey,
   };
 
   if (!activeChat?.character_id) {
@@ -583,6 +589,8 @@ function getOperationTitle(kind: OperationKind): string {
       return "Export Snapshot";
     case "import_snapshot":
       return "Import Snapshot";
+    case "sync_obsidian_vault":
+      return "Sync Obsidian Vault";
   }
 }
 
@@ -603,6 +611,9 @@ function summarizeOutcome(kind: OperationKind, outcome: Pick<OperationOutcome<un
     case "import_snapshot":
       if (issueCount) return `Imported Lore Recall snapshot with ${issueCount} issue(s).`;
       return "Imported Lore Recall snapshot.";
+    case "sync_obsidian_vault":
+      if (issueCount) return `Synced ${outcome.completed} note(s) with ${issueCount} issue(s).`;
+      return `Synced ${outcome.completed} note(s) from the Obsidian vault.`;
   }
 }
 
@@ -996,6 +1007,33 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case "apply_suggested_books":
         await applySuggestedBooks(message.characterId, message.bookIds, message.mode, userId);
         await pushState(userId, message.chatId);
+        break;
+
+      case "save_obsidian_settings":
+        await saveObsidianSettings(
+          {
+            characterId: message.characterId,
+            baseUrl: message.baseUrl,
+            apiKey: message.apiKey,
+            vaultSource: message.vaultSource,
+            vaultSubfolder: message.vaultSubfolder,
+          },
+          userId,
+        );
+        await pushState(userId, message.chatId);
+        break;
+
+      case "test_obsidian_connection": {
+        const result = await runObsidianConnectionTest({ baseUrl: message.baseUrl, apiKey: message.apiKey }, userId);
+        send({ type: "notice", message: result }, userId);
+        await pushState(userId, message.chatId);
+        break;
+      }
+
+      case "sync_obsidian_vault":
+        await runTrackedOperation(userId, message, "sync_obsidian_vault", (operation) =>
+          syncObsidianVault(message.characterId, userId, operation),
+        );
         break;
     }
   } catch (error: unknown) {

@@ -1,4 +1,5 @@
 export type SearchMode = "collapsed" | "traversal";
+export type VaultSource = "default" | "obsidian";
 export type BookPermission = "read_write" | "read_only" | "write_only";
 export type MultiBookMode = "unified" | "per_book";
 export type BuildDetail = "names" | "lite" | "full";
@@ -28,6 +29,8 @@ export interface GlobalLoreRecallSettings {
   treeGranularity: number;
   chunkTokens: number;
   dedupMode: DedupMode;
+  /** Base URL of the Obsidian "Local REST API" plugin, e.g. http://127.0.0.1:27123. */
+  obsidianBaseUrl: string;
 }
 
 export interface CharacterRetrievalConfig {
@@ -43,6 +46,12 @@ export interface CharacterRetrievalConfig {
   selectiveRetrieval: boolean;
   multiBookMode: MultiBookMode;
   contextMessages: number;
+  /** Where this character's lore comes from: the default managed books, or a synced Obsidian vault. */
+  vaultSource: VaultSource;
+  /** Optional vault subfolder to scope the sync to (empty = whole vault). */
+  obsidianVaultSubfolder: string;
+  /** World-book id of the managed book that the vault syncs into (set automatically on first sync). */
+  obsidianManagedBookId: string;
 }
 
 export interface BookRetrievalConfig {
@@ -312,7 +321,8 @@ export type OperationKind =
   | "build_tree_with_llm"
   | "regenerate_summaries"
   | "export_snapshot"
-  | "import_snapshot";
+  | "import_snapshot"
+  | "sync_obsidian_vault";
 
 export type OperationStatus = "started" | "running" | "completed" | "failed";
 
@@ -370,6 +380,8 @@ export interface FrontendState {
   suggestedBookIds: string[];
   retrievalFeed: RetrievalFeedState;
   preview: RetrievalPreview | null;
+  /** Whether an Obsidian API key is stored in the enclave for this user (the key itself is never sent to the UI). */
+  obsidianHasApiKey: boolean;
 }
 
 export type FrontendToBackend =
@@ -475,6 +487,28 @@ export type FrontendToBackend =
       chatId?: string | null;
       bookIds: string[];
       mode: "append" | "replace";
+    }
+  | {
+      type: "save_obsidian_settings";
+      characterId: string;
+      chatId?: string | null;
+      baseUrl: string;
+      /** New API key to store, or null to leave the stored key unchanged. */
+      apiKey: string | null;
+      vaultSource: VaultSource;
+      vaultSubfolder: string;
+    }
+  | {
+      type: "test_obsidian_connection";
+      chatId?: string | null;
+      baseUrl: string;
+      /** Override key to test with, or null to use the stored key. */
+      apiKey: string | null;
+    }
+  | {
+      type: "sync_obsidian_vault";
+      characterId: string;
+      chatId?: string | null;
     };
 
 export type BackendToFrontend =

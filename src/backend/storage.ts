@@ -48,6 +48,20 @@ import {
 const WORLD_BOOK_LIST_TTL_MS = 5000;
 const worldBookListCache = new Map<string, { expiresAt: number; books: WorldBookDTO[] }>();
 
+const OBSIDIAN_API_KEY_ENCLAVE_KEY = "obsidian_api_key";
+
+export async function loadObsidianApiKey(userId: string): Promise<string | null> {
+  return spindle.enclave.get(OBSIDIAN_API_KEY_ENCLAVE_KEY, userId).catch(() => null);
+}
+
+export async function saveObsidianApiKey(userId: string, key: string): Promise<void> {
+  await spindle.enclave.put(OBSIDIAN_API_KEY_ENCLAVE_KEY, key, userId);
+}
+
+export async function hasObsidianApiKey(userId: string): Promise<boolean> {
+  return spindle.enclave.has(OBSIDIAN_API_KEY_ENCLAVE_KEY, userId).catch(() => false);
+}
+
 export function invalidateWorldBookListCache(userId?: string): void {
   if (typeof userId === "string") {
     worldBookListCache.delete(userId);

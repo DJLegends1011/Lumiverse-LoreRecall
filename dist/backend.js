@@ -12,7 +12,8 @@ var DEFAULT_GLOBAL_SETTINGS = {
   buildDetail: "lite",
   treeGranularity: 0,
   chunkTokens: 30000,
-  dedupMode: "none"
+  dedupMode: "none",
+  obsidianBaseUrl: "http://127.0.0.1:27123"
 };
 var DEFAULT_CHARACTER_CONFIG = {
   enabled: false,
@@ -26,7 +27,10 @@ var DEFAULT_CHARACTER_CONFIG = {
   rerankEnabled: false,
   selectiveRetrieval: true,
   multiBookMode: "unified",
-  contextMessages: 10
+  contextMessages: 10,
+  vaultSource: "default",
+  obsidianVaultSubfolder: "",
+  obsidianManagedBookId: ""
 };
 var DEFAULT_BOOK_CONFIG = {
   enabled: true,
@@ -110,7 +114,8 @@ function normalizeGlobalSettings(value) {
     buildDetail: next.buildDetail === "full" || next.buildDetail === "names" ? next.buildDetail : "lite",
     treeGranularity: clampInt(typeof next.treeGranularity === "number" ? next.treeGranularity : DEFAULT_GLOBAL_SETTINGS.treeGranularity, 0, 4),
     chunkTokens: clampInt(typeof next.chunkTokens === "number" ? next.chunkTokens : DEFAULT_GLOBAL_SETTINGS.chunkTokens, 1000, 120000),
-    dedupMode: next.dedupMode === "lexical" || next.dedupMode === "llm" ? next.dedupMode : "none"
+    dedupMode: next.dedupMode === "lexical" || next.dedupMode === "llm" ? next.dedupMode : "none",
+    obsidianBaseUrl: typeof next.obsidianBaseUrl === "string" && next.obsidianBaseUrl.trim() ? next.obsidianBaseUrl.trim() : DEFAULT_GLOBAL_SETTINGS.obsidianBaseUrl
   };
 }
 function getEffectiveTreeGranularity(setting, entryCount = 0) {
@@ -170,7 +175,10 @@ function normalizeCharacterConfig(value) {
     rerankEnabled: !!next.rerankEnabled,
     selectiveRetrieval: next.selectiveRetrieval !== false,
     multiBookMode: next.multiBookMode === "per_book" ? "per_book" : "unified",
-    contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100)
+    contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100),
+    vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
+    obsidianVaultSubfolder: typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianManagedBookId: typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : ""
   };
 }
 function normalizeBookConfig(value) {
@@ -648,6 +656,16 @@ async function ensureStorageFolders(userId) {
 // src/backend/storage.ts
 var WORLD_BOOK_LIST_TTL_MS = 5000;
 var worldBookListCache = new Map;
+var OBSIDIAN_API_KEY_ENCLAVE_KEY = "obsidian_api_key";
+async function loadObsidianApiKey(userId) {
+  return spindle.enclave.get(OBSIDIAN_API_KEY_ENCLAVE_KEY, userId).catch(() => null);
+}
+async function saveObsidianApiKey(userId, key) {
+  await spindle.enclave.put(OBSIDIAN_API_KEY_ENCLAVE_KEY, key, userId);
+}
+async function hasObsidianApiKey(userId) {
+  return spindle.enclave.has(OBSIDIAN_API_KEY_ENCLAVE_KEY, userId).catch(() => false);
+}
 function invalidateWorldBookListCache(userId) {
   if (typeof userId === "string") {
     worldBookListCache.delete(userId);
@@ -4245,6 +4263,176 @@ function enforceLeafEntryLimit(tree, granularity, createdBy) {
   return splitCount;
 }
 
+// src/backend/obsidian.ts
+class ObsidianRequestError extends Error {
+  status;
+  constructor(message, status) {
+    super(message);
+    this.name = "ObsidianRequestError";
+    this.status = status;
+  }
+}
+function joinUrl(baseUrl, path) {
+  const base = baseUrl.replace(/\/+$/, "");
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${suffix}`;
+}
+function encodeVaultPath(path) {
+  return path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function interpretCorsResponse(raw) {
+  if (typeof raw === "string") {
+    return { status: 200, text: raw, json: tryParseJson(raw) };
+  }
+  const record = asRecord(raw);
+  if (!record) {
+    return { status: 200, text: JSON.stringify(raw ?? null), json: raw };
+  }
+  const status = typeof record.status === "number" ? record.status : 200;
+  const bodyCandidate = record.body !== undefined ? record.body : record.data !== undefined ? record.data : record.text !== undefined ? record.text : record.content !== undefined ? record.content : undefined;
+  if (typeof bodyCandidate === "string") {
+    return { status, text: bodyCandidate, json: tryParseJson(bodyCandidate) };
+  }
+  if (bodyCandidate !== undefined) {
+    return { status, text: JSON.stringify(bodyCandidate), json: bodyCandidate };
+  }
+  const { status: _ignored, ...rest } = record;
+  return { status, text: JSON.stringify(rest), json: rest };
+}
+function tryParseJson(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+async function request(cfg, path, init) {
+  const headers = {
+    Authorization: `Bearer ${cfg.apiKey}`
+  };
+  if (init?.accept)
+    headers.Accept = init.accept;
+  if (init?.body)
+    headers["Content-Type"] = "application/json";
+  let raw;
+  try {
+    raw = await spindle.cors(joinUrl(cfg.baseUrl, path), {
+      method: init?.method ?? "GET",
+      headers,
+      body: init?.body
+    });
+  } catch (error) {
+    throw new ObsidianRequestError(`Could not reach Obsidian at ${cfg.baseUrl} (${error instanceof Error ? error.message : String(error)}). ` + `Make sure Obsidian is running on this machine with the "Local REST API" plugin enabled.`, 0);
+  }
+  const result = interpretCorsResponse(raw);
+  if (result.status >= 400) {
+    throw new ObsidianRequestError(`Obsidian request to ${path} failed with status ${result.status}.`, result.status);
+  }
+  return result;
+}
+async function testConnection(cfg) {
+  const url = joinUrl(cfg.baseUrl, "/");
+  let raw;
+  try {
+    raw = await spindle.cors(url, { method: "GET", headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+  } catch (error) {
+    throw new ObsidianRequestError(`Could not reach Obsidian at ${cfg.baseUrl} (${error instanceof Error ? error.message : String(error)}).`, 0);
+  }
+  spindle.log.info(`Lore Recall Obsidian ping raw response type=${typeof raw}: ${truncateForLog(raw)}`);
+  const result = interpretCorsResponse(raw);
+  if (result.status >= 400 && result.status !== 401) {
+    throw new ObsidianRequestError(`Obsidian responded with status ${result.status}.`, result.status);
+  }
+  const payload = asRecord(result.json) ?? {};
+  const authenticated = payload.authenticated === true;
+  return {
+    ok: true,
+    authenticated,
+    service: typeof payload.service === "string" ? payload.service : "Obsidian Local REST API",
+    versions: payload.versions && typeof payload.versions === "object" ? JSON.stringify(payload.versions) : typeof payload.versions === "string" ? payload.versions : ""
+  };
+}
+function readFileList(json) {
+  const record = asRecord(json);
+  const files = record?.files;
+  if (!Array.isArray(files))
+    return [];
+  return files.filter((entry) => typeof entry === "string");
+}
+async function walkVault(cfg) {
+  const root = cfg.subfolder ? `${cfg.subfolder.replace(/^\/+|\/+$/g, "")}/` : "";
+  const notes = [];
+  const seen = new Set;
+  async function walk(dir) {
+    if (seen.has(dir))
+      return;
+    seen.add(dir);
+    const listPath = `/vault/${encodeVaultPath(dir)}`;
+    const result = await request(cfg, listPath);
+    for (const entry of readFileList(result.json)) {
+      const full = `${dir}${entry}`;
+      if (entry.endsWith("/")) {
+        await walk(full);
+      } else if (entry.toLowerCase().endsWith(".md")) {
+        notes.push(full);
+      }
+    }
+  }
+  await walk(root);
+  return notes;
+}
+async function getNote(cfg, path) {
+  const result = await request(cfg, `/vault/${encodeVaultPath(path)}`, {
+    accept: "application/vnd.olrapi.note+json"
+  });
+  const record = asRecord(result.json) ?? {};
+  const tags = Array.isArray(record.tags) ? record.tags.filter((t) => typeof t === "string") : [];
+  return {
+    path: typeof record.path === "string" ? record.path : path,
+    content: typeof record.content === "string" ? record.content : "",
+    tags,
+    frontmatter: asRecord(record.frontmatter) ?? {}
+  };
+}
+function parseWikilinks(content) {
+  const targets = [];
+  const seen = new Set;
+  const pattern = /\[\[([^\]]+)\]\]/g;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    const inner = match[1];
+    if (!inner)
+      continue;
+    const beforeAlias = inner.split("|")[0] ?? "";
+    const beforeHeading = beforeAlias.split("#")[0] ?? "";
+    const segments = beforeHeading.split("/");
+    const name = (segments[segments.length - 1] ?? "").trim();
+    if (!name)
+      continue;
+    const key = name.toLowerCase();
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    targets.push(name);
+  }
+  return targets;
+}
+function truncateForLog(value) {
+  let text;
+  try {
+    text = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  return text.length > 240 ? `${text.slice(0, 240)}...` : text;
+}
+
 // src/backend/operations.ts
 var CATEGORIZATION_SYSTEM_PROMPT = "You are a categorization assistant. Return only the requested JSON. Do not include commentary, markdown fences, or reasoning text.";
 var SUMMARY_SYSTEM_PROMPT = "You are a summarization assistant. Return only the requested JSON. Do not include commentary, markdown fences, or reasoning text.";
@@ -4916,6 +5104,180 @@ async function buildTreeFromMetadata(bookIds, userId, operation) {
     completed,
     total: ids.length
   };
+}
+function noteTitle(note) {
+  const fm = note.frontmatter;
+  if (typeof fm.title === "string" && fm.title.trim())
+    return fm.title.trim();
+  const base = note.path.split("/").pop() ?? note.path;
+  return base.replace(/\.md$/i, "") || note.path;
+}
+function noteFolderPath(path) {
+  const idx = path.lastIndexOf("/");
+  return idx >= 0 ? path.slice(0, idx) : "";
+}
+function noteAliases(note) {
+  const raw = note.frontmatter.aliases ?? note.frontmatter.alias;
+  if (Array.isArray(raw))
+    return uniqueStrings(raw.filter((v) => typeof v === "string"));
+  if (typeof raw === "string")
+    return uniqueStrings(raw.split(",").map((v) => v.trim()));
+  return [];
+}
+function readObsidianPath(entry) {
+  const ext = (entry.extensions || {})[EXTENSION_KEY];
+  if (ext && typeof ext === "object" && !Array.isArray(ext)) {
+    const value = ext.obsidianPath;
+    if (typeof value === "string" && value)
+      return value;
+  }
+  return null;
+}
+async function buildObsidianConfig(userId, settings, subfolder, apiKeyOverride) {
+  const apiKey = apiKeyOverride && apiKeyOverride.trim() ? apiKeyOverride.trim() : await loadObsidianApiKey(userId);
+  if (!settings.obsidianBaseUrl.trim()) {
+    throw new Error("Set the Obsidian base URL before connecting (e.g. http://127.0.0.1:27123).");
+  }
+  if (!apiKey) {
+    throw new Error("No Obsidian API key is stored. Enter the Local REST API key and save before syncing.");
+  }
+  return { baseUrl: settings.obsidianBaseUrl.trim(), apiKey, subfolder: subfolder.replace(/^\/+|\/+$/g, "") };
+}
+async function saveObsidianSettings(params, userId) {
+  await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
+  if (params.apiKey && params.apiKey.trim()) {
+    await saveObsidianApiKey(userId, params.apiKey.trim());
+  }
+  await saveCharacterConfig(params.characterId, { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder }, userId);
+}
+async function runObsidianConnectionTest(params, userId) {
+  const settings = await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
+  if (params.apiKey && params.apiKey.trim()) {
+    await saveObsidianApiKey(userId, params.apiKey.trim());
+  }
+  const cfg = await buildObsidianConfig(userId, settings, "", params.apiKey);
+  const info = await testConnection(cfg);
+  if (!info.authenticated) {
+    return `Reached ${cfg.baseUrl}, but the API key was not accepted. Double-check the Local REST API key.`;
+  }
+  return `Connected to ${info.service} at ${cfg.baseUrl}.`;
+}
+async function syncObsidianVault(characterId, userId, operation) {
+  const issues = [];
+  const settings = await loadGlobalSettings(userId);
+  const character = await spindle.characters.get(characterId, userId);
+  if (!character) {
+    throw new Error("The active character could not be loaded for syncing.");
+  }
+  const config = await loadCharacterConfig(characterId, userId, character);
+  const cfg = await buildObsidianConfig(userId, settings, config.obsidianVaultSubfolder, null);
+  operation?.progress({ phase: "loading", message: "Connecting to Obsidian...", percent: 2, current: null, total: null });
+  let bookId = config.obsidianManagedBookId;
+  let book = bookId ? await spindle.world_books.get(bookId, userId) : null;
+  if (!book) {
+    book = await spindle.world_books.create({
+      name: `Obsidian \u2014 ${character.name || "Vault"}`,
+      description: "Managed by Lore Recall \u2014 synced from an Obsidian vault. Re-sync to update.",
+      metadata: { source: "obsidian", loreRecallManaged: true }
+    }, userId);
+    bookId = book.id;
+    await saveCharacterConfig(characterId, { obsidianManagedBookId: bookId }, userId, character);
+  }
+  operation?.progress({ phase: "loading", message: "Listing vault notes...", percent: 6, current: null, total: null });
+  const notePaths = await walkVault(cfg);
+  const existingEntries = await listAllEntries(bookId, userId);
+  const byPath = new Map;
+  for (const entry of existingEntries) {
+    const path = readObsidianPath(entry);
+    if (path)
+      byPath.set(path, entry);
+  }
+  let added = 0;
+  let updated = 0;
+  const syncedPaths = new Set;
+  for (const [index, notePath] of notePaths.entries()) {
+    syncedPaths.add(notePath);
+    operation?.progress({
+      phase: "classifying",
+      message: `Syncing ${notePath}`,
+      current: index + 1,
+      total: notePaths.length,
+      percent: Math.round(index / Math.max(1, notePaths.length) * 80) + 6
+    });
+    try {
+      const note = await getNote(cfg, notePath);
+      const title = noteTitle(note);
+      const folder = noteFolderPath(note.path || notePath);
+      const wikilinks = parseWikilinks(note.content);
+      const aliases = noteAliases(note);
+      const existing = byPath.get(notePath);
+      const meta = {
+        obsidianPath: notePath,
+        label: title,
+        aliases,
+        summary: "",
+        collapsedText: "",
+        tags: note.tags
+      };
+      const entryInput = {
+        content: note.content,
+        comment: title,
+        key: [title],
+        keysecondary: uniqueStrings([...wikilinks, ...aliases]),
+        group_name: folder,
+        extensions: {
+          ...existing?.extensions ?? {},
+          [EXTENSION_KEY]: {
+            ...existing?.extensions?.[EXTENSION_KEY] ?? {},
+            ...meta
+          }
+        }
+      };
+      if (existing) {
+        await spindle.world_books.entries.update(existing.id, entryInput, userId);
+        updated += 1;
+      } else {
+        await spindle.world_books.entries.create(bookId, entryInput, userId);
+        added += 1;
+      }
+    } catch (error) {
+      const issue = {
+        severity: "warn",
+        message: `Skipped ${notePath}: ${describeError(error)}`,
+        bookId,
+        phase: "classifying"
+      };
+      issues.push(issue);
+      operation?.addIssue(issue);
+    }
+  }
+  let removed = 0;
+  for (const [path, entry] of byPath.entries()) {
+    if (syncedPaths.has(path))
+      continue;
+    try {
+      await spindle.world_books.entries.delete(entry.id, userId);
+      removed += 1;
+    } catch (error) {
+      const issue = {
+        severity: "warn",
+        message: `Could not remove stale entry for ${path}: ${describeError(error)}`,
+        bookId,
+        phase: "saving"
+      };
+      issues.push(issue);
+      operation?.addIssue(issue);
+    }
+  }
+  operation?.progress({ phase: "saving", message: "Building tree from vault folders...", percent: 90, current: null, total: null });
+  invalidateWorldBookListCache(userId);
+  await invalidateBookCache(bookId, userId);
+  const treeOutcome = await buildTreeFromMetadata([bookId], userId, operation);
+  for (const issue of treeOutcome.issues)
+    issues.push(issue);
+  spindle.log.info(`Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (book ${bookId}).`);
+  operation?.progress({ phase: "complete", message: "Vault sync complete.", percent: 100, current: null, total: null });
+  return { issues, completed: added + updated, total: notePaths.length };
 }
 function chunkEntries(items, chunkTokens, measure) {
   const maxChars = Math.max(2000, chunkTokens * 4);
@@ -6237,11 +6599,12 @@ function summarizeTrace(preview) {
   return preview.trace.map((step) => `${step.step}:${step.phase}:${step.label}`).slice(0, 6).join(" | ");
 }
 async function buildState(userId, chatId) {
-  const [allBooks, activeChat, settings, connections] = await Promise.all([
+  const [allBooks, activeChat, settings, connections, obsidianHasApiKey] = await Promise.all([
     listAllWorldBooks(userId),
     resolveActiveChat(userId, chatId),
     loadGlobalSettings(userId),
-    listConnectionsCached(userId)
+    listConnectionsCached(userId),
+    hasObsidianApiKey(userId)
   ]);
   const sortedBooks = allBooks.slice().sort((left, right) => left.name.localeCompare(right.name)).map(toBookSummary);
   const cachedPreview = activeChat?.id ? previewCache.get(getPreviewCacheKey(userId, activeChat.id)) ?? null : null;
@@ -6262,7 +6625,8 @@ async function buildState(userId, chatId) {
     diagnosticsResults: [],
     suggestedBookIds: [],
     retrievalFeed: cachedRetrievalFeed,
-    preview: cachedPreview
+    preview: cachedPreview,
+    obsidianHasApiKey
   };
   if (!activeChat?.character_id) {
     return { state: baseState };
@@ -6392,6 +6756,8 @@ function getOperationTitle(kind) {
       return "Export Snapshot";
     case "import_snapshot":
       return "Import Snapshot";
+    case "sync_obsidian_vault":
+      return "Sync Obsidian Vault";
   }
 }
 function summarizeOutcome(kind, outcome, issues) {
@@ -6415,6 +6781,10 @@ function summarizeOutcome(kind, outcome, issues) {
       if (issueCount)
         return `Imported Lore Recall snapshot with ${issueCount} issue(s).`;
       return "Imported Lore Recall snapshot.";
+    case "sync_obsidian_vault":
+      if (issueCount)
+        return `Synced ${outcome.completed} note(s) with ${issueCount} issue(s).`;
+      return `Synced ${outcome.completed} note(s) from the Obsidian vault.`;
   }
 }
 function createInitialOperation(id, kind, message) {
@@ -6723,6 +7093,25 @@ spindle.onFrontendMessage(async (payload, userId) => {
       case "apply_suggested_books":
         await applySuggestedBooks(message.characterId, message.bookIds, message.mode, userId);
         await pushState(userId, message.chatId);
+        break;
+      case "save_obsidian_settings":
+        await saveObsidianSettings({
+          characterId: message.characterId,
+          baseUrl: message.baseUrl,
+          apiKey: message.apiKey,
+          vaultSource: message.vaultSource,
+          vaultSubfolder: message.vaultSubfolder
+        }, userId);
+        await pushState(userId, message.chatId);
+        break;
+      case "test_obsidian_connection": {
+        const result = await runObsidianConnectionTest({ baseUrl: message.baseUrl, apiKey: message.apiKey }, userId);
+        send({ type: "notice", message: result }, userId);
+        await pushState(userId, message.chatId);
+        break;
+      }
+      case "sync_obsidian_vault":
+        await runTrackedOperation(userId, message, "sync_obsidian_vault", (operation) => syncObsidianVault(message.characterId, userId, operation));
         break;
     }
   } catch (error) {

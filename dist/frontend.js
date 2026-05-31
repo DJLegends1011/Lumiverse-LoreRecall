@@ -8,7 +8,8 @@ var DEFAULT_GLOBAL_SETTINGS = {
   buildDetail: "lite",
   treeGranularity: 0,
   chunkTokens: 30000,
-  dedupMode: "none"
+  dedupMode: "none",
+  obsidianBaseUrl: "http://127.0.0.1:27123"
 };
 var DEFAULT_CHARACTER_CONFIG = {
   enabled: false,
@@ -22,7 +23,10 @@ var DEFAULT_CHARACTER_CONFIG = {
   rerankEnabled: false,
   selectiveRetrieval: true,
   multiBookMode: "unified",
-  contextMessages: 10
+  contextMessages: 10,
+  vaultSource: "default",
+  obsidianVaultSubfolder: "",
+  obsidianManagedBookId: ""
 };
 var TREE_GRANULARITY_PRESETS = {
   1: {
@@ -100,7 +104,8 @@ function normalizeGlobalSettings(value) {
     buildDetail: next.buildDetail === "full" || next.buildDetail === "names" ? next.buildDetail : "lite",
     treeGranularity: clampInt(typeof next.treeGranularity === "number" ? next.treeGranularity : DEFAULT_GLOBAL_SETTINGS.treeGranularity, 0, 4),
     chunkTokens: clampInt(typeof next.chunkTokens === "number" ? next.chunkTokens : DEFAULT_GLOBAL_SETTINGS.chunkTokens, 1000, 120000),
-    dedupMode: next.dedupMode === "lexical" || next.dedupMode === "llm" ? next.dedupMode : "none"
+    dedupMode: next.dedupMode === "lexical" || next.dedupMode === "llm" ? next.dedupMode : "none",
+    obsidianBaseUrl: typeof next.obsidianBaseUrl === "string" && next.obsidianBaseUrl.trim() ? next.obsidianBaseUrl.trim() : DEFAULT_GLOBAL_SETTINGS.obsidianBaseUrl
   };
 }
 function getEffectiveTreeGranularity(setting, entryCount = 0) {
@@ -160,7 +165,10 @@ function normalizeCharacterConfig(value) {
     rerankEnabled: !!next.rerankEnabled,
     selectiveRetrieval: next.selectiveRetrieval !== false,
     multiBookMode: next.multiBookMode === "per_book" ? "per_book" : "unified",
-    contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100)
+    contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100),
+    vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
+    obsidianVaultSubfolder: typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianManagedBookId: typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : ""
   };
 }
 function normalizeBookConfig(value) {
@@ -3335,6 +3343,7 @@ function setup(ctx) {
   let globalDraftKey = "";
   let characterDraft = null;
   let characterDraftKey = "";
+  let obsidianApiKeyDraft = "";
   const bookDrafts = new Map;
   const entryDrafts = new Map;
   const categoryDrafts = new Map;
@@ -5574,6 +5583,67 @@ function setup(ctx) {
     section.appendChild(actions);
     return section;
   }
+  function renderObsidianSettings(state) {
+    const section = createElement("section", "lore-section");
+    section.appendChild(createSectionHead("Obsidian vault", "Sync an Obsidian vault into a managed book. Folders become categories, notes become entries, and [[wikilinks]] link related notes."));
+    if (!characterDraft || !globalDraft || !state.activeCharacterId) {
+      section.appendChild(createEmpty("No active character", "Open a character chat to connect an Obsidian vault.", null, "feed"));
+      return section;
+    }
+    const form = createElement("div", "lore-form");
+    form.appendChild(createField("Lore source", createSelect(characterDraft.vaultSource, [
+      ["default", "Default managed books"],
+      ["obsidian", "Obsidian vault"]
+    ], (next) => {
+      characterDraft.vaultSource = next;
+    })));
+    form.appendChild(createField("Base URL", createTextInput(globalDraft.obsidianBaseUrl, "http://127.0.0.1:27123", (next) => {
+      globalDraft.obsidianBaseUrl = next;
+    })));
+    const apiKeyInput = createTextInput(obsidianApiKeyDraft, state.obsidianHasApiKey ? "•••••• (stored — leave blank to keep)" : "Local REST API key", (next) => {
+      obsidianApiKeyDraft = next;
+    });
+    apiKeyInput.type = "password";
+    form.appendChild(createField("API key", apiKeyInput));
+    form.appendChild(createField("Vault subfolder", createTextInput(characterDraft.obsidianVaultSubfolder, "(optional, e.g. Lore/Characters)", (next) => {
+      characterDraft.obsidianVaultSubfolder = next;
+    })));
+    form.appendChild(createFieldNote(characterDraft.obsidianManagedBookId ? "Synced into a managed book. Re-syncing updates changed notes, adds new ones, and removes deleted ones." : "On first sync, a dedicated managed book is created for this character's vault."));
+    section.appendChild(form);
+    const actions = createElement("div", "lore-actions");
+    actions.appendChild(createButton("Test connection", "lore-btn lore-btn-ghost lore-btn-sm", () => {
+      sendToBackend(ctx, {
+        type: "test_obsidian_connection",
+        chatId: state.activeChatId,
+        baseUrl: globalDraft.obsidianBaseUrl,
+        apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null
+      });
+    }));
+    actions.appendChild(createElement("span", "lore-actions-spacer"));
+    actions.appendChild(createButton("Save Obsidian settings", "lore-btn lore-btn-sm", () => {
+      sendToBackend(ctx, {
+        type: "save_obsidian_settings",
+        characterId: state.activeCharacterId,
+        chatId: state.activeChatId,
+        baseUrl: globalDraft.obsidianBaseUrl,
+        apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
+        vaultSource: characterDraft.vaultSource,
+        vaultSubfolder: characterDraft.obsidianVaultSubfolder
+      });
+      obsidianApiKeyDraft = "";
+      flashSavedNotice("Obsidian settings saved");
+    }));
+    actions.appendChild(createButton("Sync vault", "lore-btn lore-btn-primary lore-btn-sm", () => {
+      sendToBackend(ctx, {
+        type: "sync_obsidian_vault",
+        characterId: state.activeCharacterId,
+        chatId: state.activeChatId
+      });
+      flashSavedNotice("Vault sync started");
+    }));
+    section.appendChild(actions);
+    return section;
+  }
   function renderBookSettings(state) {
     const section = createElement("section", "lore-section");
     section.appendChild(createSectionHead("Book settings", "Per-book enable, permission and description."));
@@ -5714,6 +5784,7 @@ function setup(ctx) {
         break;
       case "retrieval":
         activePanel.appendChild(renderCharacterSettings(currentState));
+        activePanel.appendChild(renderObsidianSettings(currentState));
         break;
       case "book":
         activePanel.appendChild(renderBookPanel(currentState));
