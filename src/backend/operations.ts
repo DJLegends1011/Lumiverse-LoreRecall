@@ -1079,8 +1079,9 @@ function cleanApiKey(raw: string): string {
 }
 
 /**
- * Whether a note should be treated as a lore entry, per the character's lore-tag
- * filter. Delegates to the shared, tested matcher in the Obsidian client.
+ * Whether a note should be treated as a lore entry. A note only qualifies if it
+ * carries the configured lore tag; a blank tag qualifies nothing. Delegates to
+ * the shared, tested matcher in the Obsidian client.
  */
 function noteHasLoreTag(note: ObsidianNote, loreTag: string): boolean {
   return tagsMatchLoreFilter(note.tags, loreTag);
@@ -1148,12 +1149,30 @@ export async function syncObsidianVault(
   }
   const config = await loadCharacterConfig(characterId, userId, character);
   const cfg = await buildObsidianConfig(userId, settings, config.obsidianVaultSubfolder, null);
+  const loreTag = config.obsidianLoreTag.trim();
 
   operation?.progress({ phase: "loading", message: "Connecting to Obsidian...", percent: 2, current: null, total: null });
+
+  // The lore tag is the gate: without it, no note qualifies as lore. Warn so the
+  // result makes sense (and any previously synced entries get pruned to empty).
+  if (!loreTag) {
+    const issue: OperationIssue = {
+      severity: "warn",
+      message: 'No lore tag set — nothing qualifies as lore. Set a Lore tag (e.g. "lore") and tag the notes you want synced.',
+      phase: "loading",
+    };
+    issues.push(issue);
+    operation?.addIssue(issue);
+  }
 
   // Resolve or create the managed world book for this character's vault.
   let bookId = config.obsidianManagedBookId;
   let book = bookId ? await spindle.world_books.get(bookId, userId) : null;
+  if (!book && !loreTag) {
+    // Nothing to sync and nothing to prune — don't create an empty managed book.
+    operation?.progress({ phase: "complete", message: "No lore tag set — nothing synced.", percent: 100, current: 0, total: 0 });
+    return { issues, completed: 0, total: 0 };
+  }
   if (!book) {
     book = await spindle.world_books.create(
       {

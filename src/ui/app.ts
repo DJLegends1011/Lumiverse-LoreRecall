@@ -3013,7 +3013,7 @@ export function setup(ctx: SpindleFrontendContext) {
     form.appendChild(
       createField(
         "Lore tag",
-        createTextInput(characterDraft.obsidianLoreTag, "(optional, e.g. lore — blank syncs every note)", (next) => {
+        createTextInput(characterDraft.obsidianLoreTag, "e.g. lore (required — only tagged notes sync)", (next) => {
           characterDraft!.obsidianLoreTag = next;
         }),
       ),
@@ -3022,8 +3022,8 @@ export function setup(ctx: SpindleFrontendContext) {
     form.appendChild(
       createFieldNote(
         characterDraft.obsidianLoreTag
-          ? `Only notes tagged #${characterDraft.obsidianLoreTag} (or a nested tag) are synced. Untagged notes already synced will be removed on the next sync.`
-          : "Leave the lore tag blank to sync every note, or set a tag (e.g. lore) to sync only tagged notes.",
+          ? `Only notes tagged #${characterDraft.obsidianLoreTag} (or a nested tag) sync. Notes without it are skipped, and any previously synced are removed on the next sync.`
+          : "Set a lore tag (e.g. lore) and tag your notes with it — only tagged notes sync. With no tag, nothing syncs.",
       ),
     );
 

@@ -280,13 +280,14 @@ export function parseWikilinks(content: string): string[] {
 }
 
 /**
- * Whether a note's tag set satisfies a lore-tag filter. Exposed for reuse/testing.
- * Empty filter matches everything; a leading "#" is ignored; nested child tags
- * (e.g. "lore/character") match the parent filter ("lore"). Case-insensitive.
+ * Whether a note's tag set qualifies it as lore. The lore tag is a gate: an
+ * empty filter matches nothing (a note must carry the tag to sync). A leading
+ * "#" is ignored; nested child tags (e.g. "lore/character") match the parent
+ * filter ("lore"). Case-insensitive. Exposed for reuse/testing.
  */
 export function tagsMatchLoreFilter(tags: string[], loreTag: string): boolean {
   const target = loreTag.trim().replace(/^#/, "").toLowerCase();
-  if (!target) return true;
+  if (!target) return false;
   return tags.some((raw) => {
     const tag = raw.trim().replace(/^#/, "").toLowerCase();
     return tag === target || tag.startsWith(`${target}/`);

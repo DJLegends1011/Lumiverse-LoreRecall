@@ -4435,7 +4435,7 @@ function parseWikilinks(content) {
 function tagsMatchLoreFilter(tags, loreTag) {
   const target = loreTag.trim().replace(/^#/, "").toLowerCase();
   if (!target)
-    return true;
+    return false;
   return tags.some((raw) => {
     const tag = raw.trim().replace(/^#/, "").toLowerCase();
     return tag === target || tag.startsWith(`${target}/`);
@@ -5196,9 +5196,23 @@ async function syncObsidianVault(characterId, userId, operation) {
   }
   const config = await loadCharacterConfig(characterId, userId, character);
   const cfg = await buildObsidianConfig(userId, settings, config.obsidianVaultSubfolder, null);
+  const loreTag = config.obsidianLoreTag.trim();
   operation?.progress({ phase: "loading", message: "Connecting to Obsidian...", percent: 2, current: null, total: null });
+  if (!loreTag) {
+    const issue = {
+      severity: "warn",
+      message: 'No lore tag set \u2014 nothing qualifies as lore. Set a Lore tag (e.g. "lore") and tag the notes you want synced.',
+      phase: "loading"
+    };
+    issues.push(issue);
+    operation?.addIssue(issue);
+  }
   let bookId = config.obsidianManagedBookId;
   let book = bookId ? await spindle.world_books.get(bookId, userId) : null;
+  if (!book && !loreTag) {
+    operation?.progress({ phase: "complete", message: "No lore tag set \u2014 nothing synced.", percent: 100, current: 0, total: 0 });
+    return { issues, completed: 0, total: 0 };
+  }
   if (!book) {
     book = await spindle.world_books.create({
       name: `Obsidian \u2014 ${character.name || "Vault"}`,

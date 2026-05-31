@@ -56,9 +56,9 @@ describe("interpretCorsResponse", () => {
 });
 
 describe("tagsMatchLoreFilter", () => {
-  test("an empty filter matches every note", () => {
-    expect(tagsMatchLoreFilter([], "")).toBe(true);
-    expect(tagsMatchLoreFilter(["anything"], "  ")).toBe(true);
+  test("an empty filter matches nothing (the tag is required to sync)", () => {
+    expect(tagsMatchLoreFilter([], "")).toBe(false);
+    expect(tagsMatchLoreFilter(["anything"], "  ")).toBe(false);
   });
 
   test("matches an exact tag, case-insensitively and ignoring a leading #", () => {
