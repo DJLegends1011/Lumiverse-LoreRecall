@@ -50,6 +50,8 @@ export interface CharacterRetrievalConfig {
   vaultSource: VaultSource;
   /** Optional vault subfolder to scope the sync to (empty = whole vault). */
   obsidianVaultSubfolder: string;
+  /** Only notes carrying this tag are synced as lore entries (empty = every note). */
+  obsidianLoreTag: string;
   /** World-book id of the managed book that the vault syncs into (set automatically on first sync). */
   obsidianManagedBookId: string;
 }
@@ -497,6 +499,7 @@ export type FrontendToBackend =
       apiKey: string | null;
       vaultSource: VaultSource;
       vaultSubfolder: string;
+      loreTag: string;
     }
   | {
       type: "test_obsidian_connection";

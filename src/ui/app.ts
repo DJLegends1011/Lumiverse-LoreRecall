@@ -3011,6 +3011,23 @@ export function setup(ctx: SpindleFrontendContext) {
     );
 
     form.appendChild(
+      createField(
+        "Lore tag",
+        createTextInput(characterDraft.obsidianLoreTag, "(optional, e.g. lore — blank syncs every note)", (next) => {
+          characterDraft!.obsidianLoreTag = next;
+        }),
+      ),
+    );
+
+    form.appendChild(
+      createFieldNote(
+        characterDraft.obsidianLoreTag
+          ? `Only notes tagged #${characterDraft.obsidianLoreTag} (or a nested tag) are synced. Untagged notes already synced will be removed on the next sync.`
+          : "Leave the lore tag blank to sync every note, or set a tag (e.g. lore) to sync only tagged notes.",
+      ),
+    );
+
+    form.appendChild(
       createFieldNote(
         characterDraft.obsidianManagedBookId
           ? "Synced into a managed book. Re-syncing updates changed notes, adds new ones, and removes deleted ones."
@@ -3042,6 +3059,7 @@ export function setup(ctx: SpindleFrontendContext) {
           apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
           vaultSource: characterDraft!.vaultSource,
           vaultSubfolder: characterDraft!.obsidianVaultSubfolder,
+          loreTag: characterDraft!.obsidianLoreTag,
         });
         obsidianApiKeyDraft = "";
         flashSavedNotice("Obsidian settings saved");

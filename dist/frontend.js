@@ -26,6 +26,7 @@ var DEFAULT_CHARACTER_CONFIG = {
   contextMessages: 10,
   vaultSource: "default",
   obsidianVaultSubfolder: "",
+  obsidianLoreTag: "",
   obsidianManagedBookId: ""
 };
 var TREE_GRANULARITY_PRESETS = {
@@ -168,6 +169,7 @@ function normalizeCharacterConfig(value) {
     contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100),
     vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
     obsidianVaultSubfolder: typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianLoreTag: typeof next.obsidianLoreTag === "string" ? next.obsidianLoreTag.trim().replace(/^#/, "") : "",
     obsidianManagedBookId: typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : ""
   };
 }
@@ -5608,6 +5610,10 @@ function setup(ctx) {
     form.appendChild(createField("Vault subfolder", createTextInput(characterDraft.obsidianVaultSubfolder, "(optional, e.g. Lore/Characters)", (next) => {
       characterDraft.obsidianVaultSubfolder = next;
     })));
+    form.appendChild(createField("Lore tag", createTextInput(characterDraft.obsidianLoreTag, "(optional, e.g. lore — blank syncs every note)", (next) => {
+      characterDraft.obsidianLoreTag = next;
+    })));
+    form.appendChild(createFieldNote(characterDraft.obsidianLoreTag ? `Only notes tagged #${characterDraft.obsidianLoreTag} (or a nested tag) are synced. Untagged notes already synced will be removed on the next sync.` : "Leave the lore tag blank to sync every note, or set a tag (e.g. lore) to sync only tagged notes."));
     form.appendChild(createFieldNote(characterDraft.obsidianManagedBookId ? "Synced into a managed book. Re-syncing updates changed notes, adds new ones, and removes deleted ones." : "On first sync, a dedicated managed book is created for this character's vault."));
     section.appendChild(form);
     const actions = createElement("div", "lore-actions");
@@ -5628,7 +5634,8 @@ function setup(ctx) {
         baseUrl: globalDraft.obsidianBaseUrl,
         apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
         vaultSource: characterDraft.vaultSource,
-        vaultSubfolder: characterDraft.obsidianVaultSubfolder
+        vaultSubfolder: characterDraft.obsidianVaultSubfolder,
+        loreTag: characterDraft.obsidianLoreTag
       });
       obsidianApiKeyDraft = "";
       flashSavedNotice("Obsidian settings saved");

@@ -81,6 +81,7 @@ import {
   type ObsidianNote,
   getNote,
   parseWikilinks,
+  tagsMatchLoreFilter,
   testConnection as testObsidianConnectionClient,
   walkVault,
 } from "./obsidian";
@@ -1077,6 +1078,14 @@ function cleanApiKey(raw: string): string {
   return raw.replace(/^\s*Bearer\s+/i, "").trim();
 }
 
+/**
+ * Whether a note should be treated as a lore entry, per the character's lore-tag
+ * filter. Delegates to the shared, tested matcher in the Obsidian client.
+ */
+function noteHasLoreTag(note: ObsidianNote, loreTag: string): boolean {
+  return tagsMatchLoreFilter(note.tags, loreTag);
+}
+
 async function buildObsidianConfig(
   userId: string,
   settings: GlobalLoreRecallSettings,
@@ -1095,7 +1104,7 @@ async function buildObsidianConfig(
 }
 
 export async function saveObsidianSettings(
-  params: { characterId: string; baseUrl: string; apiKey: string | null; vaultSource: "default" | "obsidian"; vaultSubfolder: string },
+  params: { characterId: string; baseUrl: string; apiKey: string | null; vaultSource: "default" | "obsidian"; vaultSubfolder: string; loreTag: string },
   userId: string,
 ): Promise<void> {
   await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
@@ -1104,7 +1113,7 @@ export async function saveObsidianSettings(
   }
   await saveCharacterConfig(
     params.characterId,
-    { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder },
+    { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder, obsidianLoreTag: params.loreTag },
     userId,
   );
 }
@@ -1170,10 +1179,10 @@ export async function syncObsidianVault(
 
   let added = 0;
   let updated = 0;
+  let skipped = 0;
   const syncedPaths = new Set<string>();
 
   for (const [index, notePath] of notePaths.entries()) {
-    syncedPaths.add(notePath);
     operation?.progress({
       phase: "classifying",
       message: `Syncing ${notePath}`,
@@ -1184,6 +1193,13 @@ export async function syncObsidianVault(
 
     try {
       const note = await getNote(cfg, notePath);
+      if (!noteHasLoreTag(note, config.obsidianLoreTag)) {
+        // Not tagged as lore — leave it out (and let it be removed below if it
+        // was synced under a previous, less restrictive filter).
+        skipped += 1;
+        continue;
+      }
+      syncedPaths.add(notePath);
       const title = noteTitle(note);
       const folder = noteFolderPath(note.path || notePath);
       const wikilinks = parseWikilinks(note.content);
@@ -1258,7 +1274,7 @@ export async function syncObsidianVault(
   for (const issue of treeOutcome.issues) issues.push(issue);
 
   spindle.log.info(
-    `Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (book ${bookId}).`,
+    `Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (skipped ${skipped}, book ${bookId}).`,
   );
 
   operation?.progress({ phase: "complete", message: "Vault sync complete.", percent: 100, current: null, total: null });

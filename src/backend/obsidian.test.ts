@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { interpretCorsResponse, parseWikilinks } from "./obsidian";
+import { interpretCorsResponse, parseWikilinks, tagsMatchLoreFilter } from "./obsidian";
 
 describe("parseWikilinks", () => {
   test("extracts a simple link", () => {
@@ -52,5 +52,26 @@ describe("interpretCorsResponse", () => {
     const result = interpretCorsResponse({ body: '{"ok":true}' });
     expect(result.status).toBe(200);
     expect(result.json).toEqual({ ok: true });
+  });
+});
+
+describe("tagsMatchLoreFilter", () => {
+  test("an empty filter matches every note", () => {
+    expect(tagsMatchLoreFilter([], "")).toBe(true);
+    expect(tagsMatchLoreFilter(["anything"], "  ")).toBe(true);
+  });
+
+  test("matches an exact tag, case-insensitively and ignoring a leading #", () => {
+    expect(tagsMatchLoreFilter(["Lore"], "lore")).toBe(true);
+    expect(tagsMatchLoreFilter(["lore"], "#lore")).toBe(true);
+  });
+
+  test("matches nested child tags", () => {
+    expect(tagsMatchLoreFilter(["lore/character"], "lore")).toBe(true);
+  });
+
+  test("does not match unrelated or merely-prefixed tags", () => {
+    expect(tagsMatchLoreFilter(["worldbuilding"], "lore")).toBe(false);
+    expect(tagsMatchLoreFilter(["lorekeeper"], "lore")).toBe(false);
   });
 });

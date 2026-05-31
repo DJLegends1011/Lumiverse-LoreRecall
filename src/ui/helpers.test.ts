@@ -31,6 +31,7 @@ function makeState(overrides: Partial<FrontendState> = {}): FrontendState {
       contextMessages: 10,
       vaultSource: "default",
       obsidianVaultSubfolder: "",
+      obsidianLoreTag: "",
       obsidianManagedBookId: "",
     },
     diagnosticsResults: [],

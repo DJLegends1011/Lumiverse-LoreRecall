@@ -1017,6 +1017,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
             apiKey: message.apiKey,
             vaultSource: message.vaultSource,
             vaultSubfolder: message.vaultSubfolder,
+            loreTag: message.loreTag,
           },
           userId,
         );

@@ -41,6 +41,7 @@ export const DEFAULT_CHARACTER_CONFIG: CharacterRetrievalConfig = {
   contextMessages: 10,
   vaultSource: "default",
   obsidianVaultSubfolder: "",
+  obsidianLoreTag: "",
   obsidianManagedBookId: "",
 };
 
@@ -277,6 +278,8 @@ export function normalizeCharacterConfig(value?: Partial<CharacterRetrievalConfi
     vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
     obsidianVaultSubfolder:
       typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianLoreTag:
+      typeof next.obsidianLoreTag === "string" ? next.obsidianLoreTag.trim().replace(/^#/, "") : "",
     obsidianManagedBookId:
       typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : "",
   };

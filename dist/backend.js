@@ -30,6 +30,7 @@ var DEFAULT_CHARACTER_CONFIG = {
   contextMessages: 10,
   vaultSource: "default",
   obsidianVaultSubfolder: "",
+  obsidianLoreTag: "",
   obsidianManagedBookId: ""
 };
 var DEFAULT_BOOK_CONFIG = {
@@ -178,6 +179,7 @@ function normalizeCharacterConfig(value) {
     contextMessages: clampInt(typeof next.contextMessages === "number" ? next.contextMessages : DEFAULT_CHARACTER_CONFIG.contextMessages, 1, 100),
     vaultSource: next.vaultSource === "obsidian" ? "obsidian" : "default",
     obsidianVaultSubfolder: typeof next.obsidianVaultSubfolder === "string" ? next.obsidianVaultSubfolder.trim().replace(/^\/+|\/+$/g, "") : "",
+    obsidianLoreTag: typeof next.obsidianLoreTag === "string" ? next.obsidianLoreTag.trim().replace(/^#/, "") : "",
     obsidianManagedBookId: typeof next.obsidianManagedBookId === "string" ? next.obsidianManagedBookId.trim() : ""
   };
 }
@@ -4430,6 +4432,15 @@ function parseWikilinks(content) {
   }
   return targets;
 }
+function tagsMatchLoreFilter(tags, loreTag) {
+  const target = loreTag.trim().replace(/^#/, "").toLowerCase();
+  if (!target)
+    return true;
+  return tags.some((raw) => {
+    const tag = raw.trim().replace(/^#/, "").toLowerCase();
+    return tag === target || tag.startsWith(`${target}/`);
+  });
+}
 function truncateForLog(value) {
   let text;
   try {
@@ -5143,6 +5154,9 @@ function readObsidianPath(entry) {
 function cleanApiKey(raw) {
   return raw.replace(/^\s*Bearer\s+/i, "").trim();
 }
+function noteHasLoreTag(note, loreTag) {
+  return tagsMatchLoreFilter(note.tags, loreTag);
+}
 async function buildObsidianConfig(userId, settings, subfolder, apiKeyOverride) {
   const override = apiKeyOverride ? cleanApiKey(apiKeyOverride) : "";
   const apiKey = override || cleanApiKey(await loadObsidianApiKey(userId) ?? "");
@@ -5159,7 +5173,7 @@ async function saveObsidianSettings(params, userId) {
   if (params.apiKey && cleanApiKey(params.apiKey)) {
     await saveObsidianApiKey(userId, cleanApiKey(params.apiKey));
   }
-  await saveCharacterConfig(params.characterId, { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder }, userId);
+  await saveCharacterConfig(params.characterId, { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder, obsidianLoreTag: params.loreTag }, userId);
 }
 async function runObsidianConnectionTest(params, userId) {
   const settings = await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
@@ -5205,9 +5219,9 @@ async function syncObsidianVault(characterId, userId, operation) {
   }
   let added = 0;
   let updated = 0;
+  let skipped = 0;
   const syncedPaths = new Set;
   for (const [index, notePath] of notePaths.entries()) {
-    syncedPaths.add(notePath);
     operation?.progress({
       phase: "classifying",
       message: `Syncing ${notePath}`,
@@ -5217,6 +5231,11 @@ async function syncObsidianVault(characterId, userId, operation) {
     });
     try {
       const note = await getNote(cfg, notePath);
+      if (!noteHasLoreTag(note, config.obsidianLoreTag)) {
+        skipped += 1;
+        continue;
+      }
+      syncedPaths.add(notePath);
       const title = noteTitle(note);
       const folder = noteFolderPath(note.path || notePath);
       const wikilinks = parseWikilinks(note.content);
@@ -5286,7 +5305,7 @@ async function syncObsidianVault(characterId, userId, operation) {
   const treeOutcome = await buildTreeFromMetadata([bookId], userId, operation);
   for (const issue of treeOutcome.issues)
     issues.push(issue);
-  spindle.log.info(`Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (book ${bookId}).`);
+  spindle.log.info(`Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (skipped ${skipped}, book ${bookId}).`);
   operation?.progress({ phase: "complete", message: "Vault sync complete.", percent: 100, current: null, total: null });
   return { issues, completed: added + updated, total: notePaths.length };
 }
@@ -7111,7 +7130,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
           baseUrl: message.baseUrl,
           apiKey: message.apiKey,
           vaultSource: message.vaultSource,
-          vaultSubfolder: message.vaultSubfolder
+          vaultSubfolder: message.vaultSubfolder,
+          loreTag: message.loreTag
         }, userId);
         await pushState(userId, message.chatId);
         break;
