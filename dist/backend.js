@@ -5140,8 +5140,12 @@ function readObsidianPath(entry) {
   }
   return null;
 }
+function cleanApiKey(raw) {
+  return raw.replace(/^\s*Bearer\s+/i, "").trim();
+}
 async function buildObsidianConfig(userId, settings, subfolder, apiKeyOverride) {
-  const apiKey = apiKeyOverride && apiKeyOverride.trim() ? apiKeyOverride.trim() : await loadObsidianApiKey(userId);
+  const override = apiKeyOverride ? cleanApiKey(apiKeyOverride) : "";
+  const apiKey = override || cleanApiKey(await loadObsidianApiKey(userId) ?? "");
   if (!settings.obsidianBaseUrl.trim()) {
     throw new Error("Set the Obsidian base URL before connecting (e.g. http://127.0.0.1:27123).");
   }
@@ -5152,15 +5156,15 @@ async function buildObsidianConfig(userId, settings, subfolder, apiKeyOverride) 
 }
 async function saveObsidianSettings(params, userId) {
   await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
-  if (params.apiKey && params.apiKey.trim()) {
-    await saveObsidianApiKey(userId, params.apiKey.trim());
+  if (params.apiKey && cleanApiKey(params.apiKey)) {
+    await saveObsidianApiKey(userId, cleanApiKey(params.apiKey));
   }
   await saveCharacterConfig(params.characterId, { vaultSource: params.vaultSource, obsidianVaultSubfolder: params.vaultSubfolder }, userId);
 }
 async function runObsidianConnectionTest(params, userId) {
   const settings = await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
-  if (params.apiKey && params.apiKey.trim()) {
-    await saveObsidianApiKey(userId, params.apiKey.trim());
+  if (params.apiKey && cleanApiKey(params.apiKey)) {
+    await saveObsidianApiKey(userId, cleanApiKey(params.apiKey));
   }
   const cfg = await buildObsidianConfig(userId, settings, "", params.apiKey);
   const info = await testConnection(cfg);

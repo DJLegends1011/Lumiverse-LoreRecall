@@ -1072,13 +1072,19 @@ function readObsidianPath(entry: WorldBookEntryDTO): string | null {
   return null;
 }
 
+/** Strip a stray "Bearer " prefix and surrounding whitespace the user may have copied. */
+function cleanApiKey(raw: string): string {
+  return raw.replace(/^\s*Bearer\s+/i, "").trim();
+}
+
 async function buildObsidianConfig(
   userId: string,
   settings: GlobalLoreRecallSettings,
   subfolder: string,
   apiKeyOverride: string | null,
 ): Promise<ObsidianConfig> {
-  const apiKey = apiKeyOverride && apiKeyOverride.trim() ? apiKeyOverride.trim() : await loadObsidianApiKey(userId);
+  const override = apiKeyOverride ? cleanApiKey(apiKeyOverride) : "";
+  const apiKey = override || cleanApiKey((await loadObsidianApiKey(userId)) ?? "");
   if (!settings.obsidianBaseUrl.trim()) {
     throw new Error("Set the Obsidian base URL before connecting (e.g. http://127.0.0.1:27123).");
   }
@@ -1093,8 +1099,8 @@ export async function saveObsidianSettings(
   userId: string,
 ): Promise<void> {
   await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
-  if (params.apiKey && params.apiKey.trim()) {
-    await saveObsidianApiKey(userId, params.apiKey.trim());
+  if (params.apiKey && cleanApiKey(params.apiKey)) {
+    await saveObsidianApiKey(userId, cleanApiKey(params.apiKey));
   }
   await saveCharacterConfig(
     params.characterId,
@@ -1109,8 +1115,8 @@ export async function runObsidianConnectionTest(
 ): Promise<string> {
   // Persist the base URL the user is testing so it survives even if they don't hit Save.
   const settings = await saveGlobalSettings({ obsidianBaseUrl: params.baseUrl }, userId);
-  if (params.apiKey && params.apiKey.trim()) {
-    await saveObsidianApiKey(userId, params.apiKey.trim());
+  if (params.apiKey && cleanApiKey(params.apiKey)) {
+    await saveObsidianApiKey(userId, cleanApiKey(params.apiKey));
   }
   const cfg = await buildObsidianConfig(userId, settings, "", params.apiKey);
   const info = await testObsidianConnectionClient(cfg);
