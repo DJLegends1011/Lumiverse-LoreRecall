@@ -4312,6 +4312,28 @@ function tryParseJson(text) {
     return null;
   }
 }
+function describeErr(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+async function httpRequest(url, init) {
+  let fetchError = null;
+  if (typeof fetch === "function") {
+    try {
+      const response = await fetch(url, { method: init.method ?? "GET", headers: init.headers, body: init.body });
+      const text = await response.text();
+      return { status: response.status, text, json: tryParseJson(text) };
+    } catch (error) {
+      fetchError = error;
+    }
+  }
+  try {
+    const raw = await spindle.cors(url, { method: init.method ?? "GET", headers: init.headers, body: init.body });
+    return interpretCorsResponse(raw);
+  } catch (corsError) {
+    const detail = fetchError ? `direct connection failed (${describeErr(fetchError)}); the host CORS proxy also refused it (${describeErr(corsError)})` : describeErr(corsError);
+    throw new ObsidianRequestError(`Could not reach Obsidian at ${url}: ${detail}. Make sure Obsidian is running on this machine with the ` + `"Local REST API" plugin enabled and that the base URL/port are correct (default http://127.0.0.1:27123).`, 0);
+  }
+}
 async function request(cfg, path, init) {
   const headers = {
     Authorization: `Bearer ${cfg.apiKey}`
@@ -4320,32 +4342,17 @@ async function request(cfg, path, init) {
     headers.Accept = init.accept;
   if (init?.body)
     headers["Content-Type"] = "application/json";
-  let raw;
-  try {
-    raw = await spindle.cors(joinUrl(cfg.baseUrl, path), {
-      method: init?.method ?? "GET",
-      headers,
-      body: init?.body
-    });
-  } catch (error) {
-    throw new ObsidianRequestError(`Could not reach Obsidian at ${cfg.baseUrl} (${error instanceof Error ? error.message : String(error)}). ` + `Make sure Obsidian is running on this machine with the "Local REST API" plugin enabled.`, 0);
-  }
-  const result = interpretCorsResponse(raw);
+  const result = await httpRequest(joinUrl(cfg.baseUrl, path), { method: init?.method, headers, body: init?.body });
   if (result.status >= 400) {
-    throw new ObsidianRequestError(`Obsidian request to ${path} failed with status ${result.status}.`, result.status);
+    const hint = result.status === 401 ? " (check the Local REST API key)" : "";
+    throw new ObsidianRequestError(`Obsidian request to ${path} failed with status ${result.status}${hint}.`, result.status);
   }
   return result;
 }
 async function testConnection(cfg) {
   const url = joinUrl(cfg.baseUrl, "/");
-  let raw;
-  try {
-    raw = await spindle.cors(url, { method: "GET", headers: { Authorization: `Bearer ${cfg.apiKey}` } });
-  } catch (error) {
-    throw new ObsidianRequestError(`Could not reach Obsidian at ${cfg.baseUrl} (${error instanceof Error ? error.message : String(error)}).`, 0);
-  }
-  spindle.log.info(`Lore Recall Obsidian ping raw response type=${typeof raw}: ${truncateForLog(raw)}`);
-  const result = interpretCorsResponse(raw);
+  const result = await httpRequest(url, { method: "GET", headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+  spindle.log.info(`Lore Recall Obsidian ping status=${result.status}: ${truncateForLog(result.text)}`);
   if (result.status >= 400 && result.status !== 401) {
     throw new ObsidianRequestError(`Obsidian responded with status ${result.status}.`, result.status);
   }
