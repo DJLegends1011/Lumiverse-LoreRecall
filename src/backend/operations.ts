@@ -1136,6 +1136,30 @@ export async function runObsidianConnectionTest(
   return `Connected to ${info.service} at ${cfg.baseUrl}.`;
 }
 
+/**
+ * Build the managed book's tree purely from Obsidian folder structure: each
+ * entry's group_name (its folder path) becomes the category hierarchy, and
+ * notes at the vault root are placed directly under the tree root. Unlike the
+ * generic metadata builder, this never invents per-note keyword categories.
+ */
+async function buildTreeFromObsidianFolders(bookId: string, userId: string): Promise<void> {
+  const cache = await loadBookCache(bookId, userId);
+  if (!cache) return;
+  const tree = createEmptyTreeIndex(bookId);
+  for (const entry of cache.entries) {
+    const path = splitHierarchy(entry.groupName || "");
+    if (path.length) {
+      const categoryId = ensureCategoryPath(tree, path, "metadata");
+      assignEntryToTarget(tree, entry.entryId, { categoryId });
+    } else {
+      assignEntryToTarget(tree, entry.entryId, "root");
+    }
+  }
+  tree.lastBuiltAt = Date.now();
+  tree.buildSource = "metadata";
+  await saveTreeIndex(bookId, tree, cache.entries.map((entry) => entry.entryId), userId);
+}
+
 export async function syncObsidianVault(
   characterId: string,
   userId: string,
@@ -1183,7 +1207,17 @@ export async function syncObsidianVault(
       userId,
     );
     bookId = book.id;
-    await saveCharacterConfig(characterId, { obsidianManagedBookId: bookId }, userId, character);
+  }
+
+  // Ensure the book is recorded as this character's vault book AND selected as a
+  // managed book, so it appears in the tree workspace and is used for retrieval.
+  if (config.obsidianManagedBookId !== bookId || !config.managedBookIds.includes(bookId)) {
+    await saveCharacterConfig(
+      characterId,
+      { obsidianManagedBookId: bookId, managedBookIds: uniqueStrings([...config.managedBookIds, bookId]) },
+      userId,
+      character,
+    );
   }
 
   operation?.progress({ phase: "loading", message: "Listing vault notes...", percent: 6, current: null, total: null });
@@ -1288,9 +1322,10 @@ export async function syncObsidianVault(
   operation?.progress({ phase: "saving", message: "Building tree from vault folders...", percent: 90, current: null, total: null });
   invalidateWorldBookListCache(userId);
   await invalidateBookCache(bookId, userId);
-  // Reuse the metadata tree builder: each entry's group_name (folder path) becomes the hierarchy.
-  const treeOutcome = await buildTreeFromMetadata([bookId], userId, operation);
-  for (const issue of treeOutcome.issues) issues.push(issue);
+  // Build the tree purely from folder structure: foldered notes nest under their
+  // folder categories, root-level notes sit at the root. (The generic metadata
+  // builder's keyword fallback would otherwise spawn a category per root note.)
+  await buildTreeFromObsidianFolders(bookId, userId);
 
   spindle.log.info(
     `Lore Recall synced Obsidian vault for ${character.name || characterId}: +${added} ~${updated} -${removed} (skipped ${skipped}, book ${bookId}).`,
