@@ -1032,6 +1032,19 @@ spindle.onFrontendMessage(async (payload, userId) => {
       }
 
       case "sync_obsidian_vault":
+        // Persist the on-screen Obsidian settings first so the sync always honors
+        // the current source/subfolder/lore-tag, even if the user didn't click Save.
+        await saveObsidianSettings(
+          {
+            characterId: message.characterId,
+            baseUrl: message.baseUrl,
+            apiKey: message.apiKey,
+            vaultSource: message.vaultSource,
+            vaultSubfolder: message.vaultSubfolder,
+            loreTag: message.loreTag,
+          },
+          userId,
+        );
         await runTrackedOperation(userId, message, "sync_obsidian_vault", (operation) =>
           syncObsidianVault(message.characterId, userId, operation),
         );

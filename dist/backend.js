@@ -7142,6 +7142,14 @@ spindle.onFrontendMessage(async (payload, userId) => {
         break;
       }
       case "sync_obsidian_vault":
+        await saveObsidianSettings({
+          characterId: message.characterId,
+          baseUrl: message.baseUrl,
+          apiKey: message.apiKey,
+          vaultSource: message.vaultSource,
+          vaultSubfolder: message.vaultSubfolder,
+          loreTag: message.loreTag
+        }, userId);
         await runTrackedOperation(userId, message, "sync_obsidian_vault", (operation) => syncObsidianVault(message.characterId, userId, operation));
         break;
     }

@@ -3071,7 +3071,13 @@ export function setup(ctx: SpindleFrontendContext) {
           type: "sync_obsidian_vault",
           characterId: state.activeCharacterId!,
           chatId: state.activeChatId,
+          baseUrl: globalDraft!.obsidianBaseUrl,
+          apiKey: obsidianApiKeyDraft.trim() ? obsidianApiKeyDraft : null,
+          vaultSource: characterDraft!.vaultSource,
+          vaultSubfolder: characterDraft!.obsidianVaultSubfolder,
+          loreTag: characterDraft!.obsidianLoreTag,
         });
+        obsidianApiKeyDraft = "";
         flashSavedNotice("Vault sync started");
       }),
     );

@@ -512,6 +512,11 @@ export type FrontendToBackend =
       type: "sync_obsidian_vault";
       characterId: string;
       chatId?: string | null;
+      baseUrl: string;
+      apiKey: string | null;
+      vaultSource: VaultSource;
+      vaultSubfolder: string;
+      loreTag: string;
     };
 
 export type BackendToFrontend =
