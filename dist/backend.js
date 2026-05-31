@@ -6902,7 +6902,7 @@ async function runTrackedOperation(userId, message, kind, runner, onSuccess) {
   try {
     const outcome = await runner(context);
     const allIssues = outcome.issues.length ? outcome.issues : issues;
-    const failed = outcome.completed === 0 && outcome.total > 0 && allIssues.length > 0;
+    const failed = outcome.completed === 0 && outcome.total > 0 && allIssues.some((issue) => issue.severity === "error");
     if (onSuccess && typeof outcome.value !== "undefined" && !failed) {
       await onSuccess(outcome.value);
     }

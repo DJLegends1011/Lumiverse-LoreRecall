@@ -705,7 +705,9 @@ async function runTrackedOperation<T>(
   try {
     const outcome = await runner(context);
     const allIssues = outcome.issues.length ? outcome.issues : issues;
-    const failed = outcome.completed === 0 && outcome.total > 0 && allIssues.length > 0;
+    // Only a hard error marks an operation failed — a warning-only outcome (e.g. a
+    // sync that intentionally synced nothing) is a completed result with notes.
+    const failed = outcome.completed === 0 && outcome.total > 0 && allIssues.some((issue) => issue.severity === "error");
 
     if (onSuccess && typeof outcome.value !== "undefined" && !failed) {
       await onSuccess(outcome.value);
