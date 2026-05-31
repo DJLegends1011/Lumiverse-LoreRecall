@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { interpretCorsResponse, parseWikilinks, tagsMatchLoreFilter } from "./obsidian";
+import { interpretCorsResponse, parseWikilinks, stripFrontmatter, tagsMatchLoreFilter } from "./obsidian";
 
 describe("parseWikilinks", () => {
   test("extracts a simple link", () => {
@@ -73,5 +73,31 @@ describe("tagsMatchLoreFilter", () => {
   test("does not match unrelated or merely-prefixed tags", () => {
     expect(tagsMatchLoreFilter(["worldbuilding"], "lore")).toBe(false);
     expect(tagsMatchLoreFilter(["lorekeeper"], "lore")).toBe(false);
+  });
+});
+
+describe("stripFrontmatter", () => {
+  test("removes a leading YAML frontmatter block and leading blank lines", () => {
+    const input = "---\ntype: lore\ntags:\n  - lore\n---\n\n# Keisha\n\nName: Keisha.";
+    expect(stripFrontmatter(input)).toBe("# Keisha\n\nName: Keisha.");
+  });
+
+  test("handles a '...' closing fence and CRLF line endings", () => {
+    const input = "---\r\ntitle: X\r\n...\r\nBody here";
+    expect(stripFrontmatter(input)).toBe("Body here");
+  });
+
+  test("leaves content without frontmatter untouched", () => {
+    expect(stripFrontmatter("# Just a heading\n\nBody")).toBe("# Just a heading\n\nBody");
+  });
+
+  test("does not strip a non-leading or unterminated fence", () => {
+    expect(stripFrontmatter("Intro\n---\ntype: lore\n---\n")).toBe("Intro\n---\ntype: lore\n---\n");
+    expect(stripFrontmatter("---\ntype: lore\nno close")).toBe("---\ntype: lore\nno close");
+  });
+
+  test("does not treat a horizontal rule as frontmatter", () => {
+    // A thematic break ("---") followed by prose is not a YAML block.
+    expect(stripFrontmatter("---\nnot yaml just text\n")).toBe("---\nnot yaml just text\n");
   });
 });

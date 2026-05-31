@@ -247,10 +247,23 @@ export async function getNote(cfg: ObsidianConfig, path: string): Promise<Obsidi
   const tags = Array.isArray(record.tags) ? record.tags.filter((t): t is string => typeof t === "string") : [];
   return {
     path: typeof record.path === "string" ? record.path : path,
-    content: typeof record.content === "string" ? record.content : "",
+    content: stripFrontmatter(typeof record.content === "string" ? record.content : ""),
     tags,
     frontmatter: asRecord(record.frontmatter) ?? {},
   };
+}
+
+/**
+ * Remove a leading YAML frontmatter block (a `---` … `---`/`...` fence at the very
+ * start of the file). Tags and aliases are parsed from the API's structured
+ * `frontmatter`/`tags` fields, so the entry body should be just the markdown.
+ * Returns the original content unchanged if no well-formed frontmatter is present.
+ */
+export function stripFrontmatter(content: string): string {
+  const text = content.replace(/^﻿/, "");
+  const match = text.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (!match) return content;
+  return text.slice(match[0].length).replace(/^[ \t\r\n]+/, "");
 }
 
 /**

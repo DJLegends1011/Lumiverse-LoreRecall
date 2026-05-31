@@ -4404,10 +4404,17 @@ async function getNote(cfg, path) {
   const tags = Array.isArray(record.tags) ? record.tags.filter((t) => typeof t === "string") : [];
   return {
     path: typeof record.path === "string" ? record.path : path,
-    content: typeof record.content === "string" ? record.content : "",
+    content: stripFrontmatter(typeof record.content === "string" ? record.content : ""),
     tags,
     frontmatter: asRecord(record.frontmatter) ?? {}
   };
+}
+function stripFrontmatter(content) {
+  const text = content.replace(/^\uFEFF/, "");
+  const match = text.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (!match)
+    return content;
+  return text.slice(match[0].length).replace(/^[ \t\r\n]+/, "");
 }
 function parseWikilinks(content) {
   const targets = [];
